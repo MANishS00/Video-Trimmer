@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+**/venv/
+**/.venv/
+
+# Environment files
+.env
+.env.local
+.env.*
+backend/.env
+backend/.env.local
+
+# Project generated files
+uploads/
+generated/
+**/uploads/
+**/generated/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Node / frontend
+node_modules/
+.next/
+out/
+
+# Logs
+*.log
