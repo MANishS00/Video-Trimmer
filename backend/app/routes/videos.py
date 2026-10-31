@@ -1,4 +1,5 @@
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -14,6 +15,50 @@ router = APIRouter(prefix="/videos", tags=["Videos"])
 
 class YouTubeDownloadRequest(BaseModel):
     youtube_url: str
+    cookies_file: str | None = None
+    cookies_from_browser: str | None = None
+
+
+def _build_download_options(
+    cookies_file: str | None = None,
+    cookies_from_browser: str | None = None,
+):
+    cookie_path = cookies_file or os.getenv("YOUTUBE_COOKIES_FILE") or os.getenv("YT_COOKIES_FILE")
+    cookie_browser = cookies_from_browser or os.getenv("YOUTUBE_COOKIES_FROM_BROWSER") or os.getenv("YT_COOKIES_FROM_BROWSER")
+
+    options = {
+        "outtmpl": "%(id)s.%(ext)s",
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "ffmpeg_location": str(Path(FFMPEG_BIN).resolve()),
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "tv_embedded", "web", "mweb"],
+                "player_skip": ["configs", "webpage"],
+            }
+        },
+        "noplaylist": True,
+        "restrictfilenames": True,
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+        "retries": 10,
+        "fragment_retries": 10,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        },
+    }
+
+    if cookie_path and Path(cookie_path).exists():
+        options["cookies"] = str(Path(cookie_path))
+    elif cookie_path:
+        options["cookies"] = str(Path(cookie_path))
+
+    if cookie_browser:
+        options["cookiesfrombrowser"] = [cookie_browser] if cookie_browser != "all" else "all"
+
+    return options
 
 
 @router.post("/download")
@@ -30,26 +75,11 @@ def download_video(request: YouTubeDownloadRequest):
     destination = None
 
     try:
-        options = {
-            "outtmpl": str(temp_dir / "%(id)s.%(ext)s"),
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "ffmpeg_location": str(Path(FFMPEG_BIN).resolve()),
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "tv_embedded"],
-                    "player_skip": ["configs", "webpage"],
-                }
-            },
-            "noplaylist": True,
-            "restrictfilenames": True,
-            "quiet": True,
-            "no_warnings": True,
-            "nocheckcertificate": True,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            },
-        }
+        options = _build_download_options(
+            cookies_file=request.cookies_file,
+            cookies_from_browser=request.cookies_from_browser,
+        )
+        options["outtmpl"] = str(temp_dir / "%(id)s.%(ext)s")
 
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -115,6 +145,18 @@ def download_video(request: YouTubeDownloadRequest):
         raise
     except Exception as exc:
         detail = str(exc).strip() or "Failed to download the YouTube video. Check the URL and try again."
+        lower_detail = detail.lower()
+
+        if "sign in to confirm you\'re not a bot" in lower_detail or "cookies" in lower_detail:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "YouTube is blocking this video as bot traffic. "
+                    "Pass a browser cookie file in the request as cookies_file or set YOUTUBE_COOKIES_FILE "
+                    "in the environment, or provide cookies_from_browser such as 'chrome' or 'firefox'."
+                ),
+            ) from exc
+
         raise HTTPException(
             status_code=400,
             detail=f"Unable to download this public YouTube video: [{type(exc).__name__}] {detail}",
