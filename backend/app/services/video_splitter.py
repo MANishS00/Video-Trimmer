@@ -128,24 +128,24 @@ def split_video(
         filename = f"part{part_number}.mp4"
         output_path = output / filename
 
+        base_filter = (
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
+        )
+
         label = f"Part {part_number}"
         text_filter = f"text='{label}':fontcolor=white:fontsize=56:x=(w-text_w)/2:y=120"
 
+        filters_to_try = []
         if FONT_PATH:
-            video_filter = (
-                "scale=1080:1920:force_original_aspect_ratio=decrease,"
-                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-                f"drawtext={text_filter}:fontfile='{FONT_PATH}'"
+            filters_to_try.append(
+                f"{base_filter},drawtext={text_filter}:fontfile='{FONT_PATH}'"
             )
-        else:
-            video_filter = (
-                "scale=1080:1920:force_original_aspect_ratio=decrease,"
-                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-                f"drawtext={text_filter}"
-            )
+        filters_to_try.append(base_filter)
 
-        subprocess.run(
-            [
+        command_succeeded = False
+        for video_filter in filters_to_try:
+            command = [
                 FFMPEG_BIN,
                 "-y",
                 "-ss", str(start),
@@ -164,11 +164,31 @@ def split_video(
                 "-b:a", "192k",
                 "-movflags", "+faststart",
                 str(output_path)
-            ],
-            capture_output=True,
-            text=True,
-            check=True
-        )
+            ]
+
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                command_succeeded = True
+                break
+
+            if "drawtext" in video_filter:
+                continue
+
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                command,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
+
+        if not command_succeeded:
+            raise RuntimeError("FFmpeg failed to generate the video clip even without the text overlay.")
 
         clips.append({
             "part": part_number,
