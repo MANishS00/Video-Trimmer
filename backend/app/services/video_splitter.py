@@ -128,10 +128,8 @@ def split_video(
         filename = f"part{part_number}.mp4"
         output_path = output / filename
 
-        text_filter = (
-            "text='Part %d':fontcolor=white:fontsize=56:x=(w-text_w)/2:y=180:"
-            "shadowcolor=black@0.8:shadowx=2:shadowy=2:box=1:boxcolor=black@0.25:boxborderw=18"
-        ) % part_number
+        label = f"Part {part_number}"
+        text_filter = f"text='{label}':fontcolor=white:fontsize=56:x=(w-text_w)/2:y=120"
 
         if FONT_PATH:
             video_filter = (
