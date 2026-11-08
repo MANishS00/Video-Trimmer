@@ -4,12 +4,18 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 
 from app.services.supabase_service import get_supabase_client, save_metadata_to_supabase, upload_file_to_supabase
 from app.services.video_splitter import split_video
 
 router = APIRouter(prefix="/shorts", tags=["Shorts"])
+
+
+def _normalize_video_id(video_id: str | None) -> str:
+    if video_id is None:
+        return ""
+    return str(video_id).strip().strip('"').strip("'")
 
 
 def _download_source_video_from_supabase(video_id: str) -> Path:
@@ -37,10 +43,30 @@ def _download_source_video_from_supabase(video_id: str) -> Path:
     return target_path
 
 
+@router.post("/split")
+def create_shorts_from_request(payload: dict | None = Body(default=None)):
+    if not payload:
+        raise HTTPException(status_code=400, detail="Request body is required and must include a video_id.")
+
+    raw_video_id = None
+    for key, value in payload.items():
+        if str(key).strip() == "video_id":
+            raw_video_id = value
+            break
+
+    if raw_video_id is None:
+        raise HTTPException(status_code=400, detail="video_id is required in the request body.")
+
+    return create_shorts(str(raw_video_id))
+
+
 @router.post("/split/{video_id}")
 def create_shorts(video_id: str):
     """Split a source video stored in Supabase into 30-second shorts."""
-    normalized_id = Path(video_id).stem if Path(video_id).suffix else video_id
+    normalized_id = _normalize_video_id(video_id)
+    if not normalized_id:
+        raise HTTPException(status_code=400, detail="video_id is required.")
+    normalized_id = Path(normalized_id).stem if Path(normalized_id).suffix else normalized_id
     temp_root = Path(tempfile.mkdtemp(prefix=f"shorts_{normalized_id}_"))
 
     try:

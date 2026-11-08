@@ -1,10 +1,11 @@
 
 import os
+import re
 import tempfile
 from pathlib import Path
 
 import yt_dlp
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.services.supabase_service import save_metadata_to_supabase, upload_file_to_supabase
@@ -17,6 +18,51 @@ class YouTubeDownloadRequest(BaseModel):
     youtube_url: str
     cookies_file: str | None = None
     cookies_from_browser: str | None = None
+
+
+class YouTubeUploadRequest(BaseModel):
+    youtube_url: str | None = None
+    title: str | None = None
+    video_id: str | None = None
+    filename: str | None = None
+    duration: float | None = None
+    source: str = "uploaded"
+
+
+def _extract_youtube_video_id(url: str | None) -> str | None:
+    if not url:
+        return None
+
+    match = re.search(r"(?:v=|/)([A-Za-z0-9_-]{11})(?:[/?&]|$)", url)
+    return match.group(1) if match else None
+
+
+def _build_video_metadata(
+    *,
+    video_id: str | None,
+    title: str | None,
+    filename: str | None,
+    youtube_url: str | None,
+    file_url: str | None,
+    storage_bucket: str,
+    size_bytes: int,
+    source: str,
+    duration: float | None = None,
+):
+    metadata = {
+        "video_id": video_id,
+        "title": title,
+        "filename": filename,
+        "youtube_url": youtube_url,
+        "file_url": file_url,
+        "storage_bucket": storage_bucket,
+        "size_bytes": size_bytes,
+        "source": source,
+    }
+
+    # The videos table in Supabase currently does not include a duration column.
+    # Keep unsupported fields out of inserts unless the table schema is explicitly extended.
+    return {key: value for key, value in metadata.items() if value is not None and value != ""}
 
 
 def _build_download_options(
@@ -59,6 +105,92 @@ def _build_download_options(
         options["cookiesfrombrowser"] = [cookie_browser] if cookie_browser != "all" else "all"
 
     return options
+
+
+@router.post("/upload")
+def upload_video(
+    file: UploadFile = File(...),
+    youtube_url: str | None = Form(default=None),
+    title: str | None = Form(default=None),
+    video_id: str | None = Form(default=None),
+    filename: str | None = Form(default=None),
+    duration: float | None = Form(default=None),
+    source: str = Form(default="uploaded"),
+):
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Video file is required.")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="video_upload_"))
+    temp_path = temp_dir / (filename or file.filename)
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded video file is empty.")
+
+    try:
+        temp_path.write_bytes(content)
+        resolved_video_id = video_id or _extract_youtube_video_id(youtube_url) or file.filename.split(".")[0]
+        target_name = filename or file.filename
+        actual_filename = target_name if target_name.lower().endswith(".mp4") else f"{target_name}.mp4"
+        if actual_filename != temp_path.name:
+            final_path = temp_dir / actual_filename
+            temp_path.rename(final_path)
+            temp_path = final_path
+
+        final_path = temp_path
+        file_size = final_path.stat().st_size
+        supabase_record = upload_file_to_supabase(
+            final_path,
+            bucket_name="youtube-videos",
+            object_name=f"{resolved_video_id}/{final_path.name}",
+            content_type="video/mp4",
+        )
+
+        if supabase_record is None:
+            raise HTTPException(
+                status_code=502,
+                detail="Supabase upload failed: no storage response was returned.",
+            )
+
+        metadata = _build_video_metadata(
+            video_id=resolved_video_id,
+            title=title or final_path.stem,
+            filename=final_path.name,
+            youtube_url=youtube_url,
+            file_url=supabase_record["public_url"],
+            storage_bucket="youtube-videos",
+            size_bytes=file_size,
+            source=source or "uploaded",
+            duration=duration,
+        )
+        save_metadata_to_supabase("videos", metadata)
+
+        return {
+            "message": "Video uploaded successfully",
+            "video_id": resolved_video_id,
+            "title": metadata["title"],
+            "filename": final_path.name,
+            "size": file_size,
+            "youtube_url": youtube_url,
+            "download_path": None,
+            "supabase_url": supabase_record["public_url"],
+            "supabase": supabase_record,
+            "uploaded_details": metadata,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = str(exc).strip() or "Failed to upload the video."
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to upload this video: [{type(exc).__name__}] {detail}",
+        )
+    finally:
+        if temp_dir.exists():
+            for item in temp_dir.iterdir():
+                if item.is_file():
+                    item.unlink(missing_ok=True)
+            if not any(temp_dir.iterdir()):
+                temp_dir.rmdir()
 
 
 @router.post("/download")
@@ -117,16 +249,16 @@ def download_video(request: YouTubeDownloadRequest):
                 detail="Supabase upload failed: no storage response was returned.",
             )
 
-        metadata = {
-            "video_id": video_id,
-            "title": info.get("title"),
-            "filename": destination.name,
-            "youtube_url": url,
-            "file_url": supabase_record["public_url"],
-            "storage_bucket": "youtube-videos",
-            "size_bytes": file_size,
-            "source": "youtube",
-        }
+        metadata = _build_video_metadata(
+            video_id=video_id,
+            title=info.get("title"),
+            filename=destination.name,
+            youtube_url=url,
+            file_url=supabase_record["public_url"],
+            storage_bucket="youtube-videos",
+            size_bytes=file_size,
+            source="youtube",
+        )
         save_metadata_to_supabase("videos", metadata)
 
         return {
