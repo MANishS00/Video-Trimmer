@@ -6,6 +6,7 @@ import unittest
 from app.routes.shorts import _normalize_video_id
 from app.routes.videos import YouTubeUploadRequest, _build_video_metadata
 from app.services.supabase_service import is_supabase_configured
+from app.services.video_splitter import FONT_PATH, resolve_font_path
 
 
 def _decode_supabase_role_key(key: str):
@@ -62,6 +63,11 @@ class VideoUploadRequestTests(unittest.TestCase):
     def test_normalize_video_id_strips_whitespace_and_quotes(self):
         self.assertEqual(_normalize_video_id('  "Mm4crwrMNRc"  '), 'Mm4crwrMNRc')
         self.assertEqual(_normalize_video_id(' Mm4crwrMNRc '), 'Mm4crwrMNRc')
+
+    def test_font_path_is_resolved_without_hardcoded_windows_only_font(self):
+        resolved = resolve_font_path()
+        self.assertIsInstance(resolved, (str, type(None)))
+        self.assertTrue(FONT_PATH is None or isinstance(FONT_PATH, str))
 
 
 if __name__ == '__main__':

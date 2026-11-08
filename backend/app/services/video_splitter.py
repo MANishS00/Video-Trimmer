@@ -37,7 +37,29 @@ def resolve_ffmpeg_path():
     return shutil.which("ffmpeg") or "ffmpeg"
 
 
+def resolve_font_path():
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        r"C:\\Windows\\Fonts\\arialbd.ttf",
+        r"C:\\Windows\\Fonts\\arial.ttf",
+        "arial.ttf",
+    ]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser()
+        if path.exists():
+            return str(path)
+
+    return None
+
+
 FFMPEG_BIN = resolve_ffmpeg_path()
+FONT_PATH = resolve_font_path()
 
 
 def ensure_ffmpeg_available():
@@ -106,11 +128,23 @@ def split_video(
         filename = f"part{part_number}.mp4"
         output_path = output / filename
 
-        video_filter = (
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
-            "drawtext=text='Part %d':fontcolor=white:fontsize=56:fontfile='arial.ttf':x=(w-text_w)/2:y=180:shadowcolor=black@0.8:shadowx=2:shadowy=2:box=1:boxcolor=black@0.25:boxborderw=18"
+        text_filter = (
+            "text='Part %d':fontcolor=white:fontsize=56:x=(w-text_w)/2:y=180:"
+            "shadowcolor=black@0.8:shadowx=2:shadowy=2:box=1:boxcolor=black@0.25:boxborderw=18"
         ) % part_number
+
+        if FONT_PATH:
+            video_filter = (
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                f"drawtext={text_filter}:fontfile='{FONT_PATH}'"
+            )
+        else:
+            video_filter = (
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                f"drawtext={text_filter}"
+            )
 
         subprocess.run(
             [
